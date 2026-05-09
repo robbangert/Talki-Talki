@@ -1,0 +1,17 @@
+{
+  "name": "LeesMee",
+  "short_name": "LeesMee",
+  "description": "Voorlezen, samenvatten en begrijpen van documenten.",
+  "lang": "nl-NL",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f7f3e9",
+  "theme_color": "#0f8c7c",
+  "icons": [
+    {
+      "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'%3E%3Crect width='192' height='192' rx='36' fill='%230f8c7c'/%3E%3Cpath d='M43 48h70a18 18 0 0 1 18 18v78H61a18 18 0 0 0-18 18V48Z' fill='%23fff'/%3E%3Cpath d='M149 48h-18v96a18 18 0 0 0-18-18H43v18a18 18 0 0 0 18 18h88V48Z' fill='%23ff7a45'/%3E%3C/svg%3E",
+      "sizes": "192x192",
+      "type": "image/svg+xml"
+    }
+  ]
+}

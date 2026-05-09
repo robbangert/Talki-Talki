@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="nl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LeesMee</title>
+    <meta
+      name="description"
+      content="LeesMee: upload documenten, luister, vat samen en stel vragen over je tekst."
+    />
+    <link rel="manifest" href="./manifest.json" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="hero">
+        <div>
+          <p class="eyebrow">Talki Talki</p>
+          <h1>LeesMee</h1>
+          <p class="subtitle">
+            Van lezen naar luisteren, samenvatten en begrijpen.
+          </p>
+        </div>
+        <div class="hero-actions">
+          <p id="planStatus" class="plan-pill">Plan: Free</p>
+          <a class="pricing-link" href="./pricing.html">Prijzen</a>
+        </div>
+      </header>
+
+      <main class="layout">
+        <section class="panel controls" aria-label="Bediening">
+          <h2>Document</h2>
+          <label class="file">
+            <span>Kies bestand</span>
+            <input id="fileInput" type="file" accept=".txt,.md,.pdf,.doc,.docx,.epub,.html" />
+          </label>
+          <p id="fileStatus" class="muted">Nog geen bestand geladen.</p>
+          <div class="row">
+            <button id="loadDemo" type="button" class="secondary">Laad voorbeeld</button>
+            <button id="saveDocumentBtn" type="button" class="ghost">Sla document op</button>
+          </div>
+          <p id="savedDocsStatus" class="muted">0 / 5 opgeslagen documenten</p>
+          <ul id="savedDocumentsList" class="saved-list">
+            <li class="muted">Nog geen opgeslagen documenten.</li>
+          </ul>
+
+          <h2>Stem en Tempo</h2>
+          <div class="grid-2">
+            <label>
+              Stijl
+              <select id="styleSelect">
+                <option value="calm">Rustig</option>
+                <option value="business">Zakelijk</option>
+                <option value="warm">Warm</option>
+                <option value="energy">Energiek</option>
+                <option value="clear">Extra duidelijk</option>
+              </select>
+            </label>
+            <label>
+              Taal
+              <select id="langSelect">
+                <option value="nl-NL">Nederlands</option>
+                <option value="en-US">Engels</option>
+                <option value="de-DE">Duits</option>
+                <option value="hu-HU">Hongaars</option>
+              </select>
+            </label>
+          </div>
+          <div class="grid-2">
+            <label>
+              AI-stem
+              <select id="aiVoiceSelect">
+                <option value="alloy">Alloy</option>
+                <option value="marin" selected>Marin</option>
+                <option value="cedar">Cedar</option>
+                <option value="coral">Coral</option>
+                <option value="verse">Verse</option>
+                <option value="shimmer">Shimmer</option>
+                <option value="nova">Nova</option>
+                <option value="sage">Sage</option>
+              </select>
+            </label>
+            <label>
+              AI-stijl
+              <select id="aiStyleSelect">
+                <option value="neutral">Neutraal</option>
+                <option value="warm">Warm</option>
+                <option value="clear">Extra duidelijk</option>
+              </select>
+            </label>
+          </div>
+          <div class="row">
+            <button id="testVoiceBtn" type="button" class="secondary">Test stem</button>
+          </div>
+          <div class="grid-2">
+            <label>
+              Snelheid <span id="rateValue">1.0x</span>
+              <input id="rateRange" type="range" min="0.6" max="1.8" value="1" step="0.1" />
+            </label>
+            <label>
+              Toonhoogte <span id="pitchValue">1.0</span>
+              <input id="pitchRange" type="range" min="0.7" max="1.4" value="1" step="0.1" />
+            </label>
+          </div>
+
+          <h2>Luistermodus</h2>
+          <div class="row wrap">
+            <button id="playBtn" type="button">Start</button>
+            <button id="pauseBtn" type="button" class="secondary">Pauze</button>
+            <button id="stopBtn" type="button" class="secondary">Stop</button>
+            <button id="backBtn" type="button" class="ghost">15 sec terug</button>
+            <button id="nextHeadingBtn" type="button" class="ghost">Volgende kop</button>
+          </div>
+          <label class="toggle">
+            <input id="filterToggle" type="checkbox" checked />
+            Kopteksten, voetteksten en paginanummers slim negeren
+          </label>
+
+          <h2>Focus</h2>
+          <div class="row wrap">
+            <button class="mode-btn active" data-mode="full" type="button">Volledig</button>
+            <button class="mode-btn" data-mode="summary" type="button">Samenvatting</button>
+            <button class="mode-btn" data-mode="chapters" type="button">Per hoofdstuk</button>
+            <button class="mode-btn" data-mode="conclusions" type="button">Conclusies</button>
+          </div>
+        </section>
+
+        <section class="panel insights" aria-label="Documenthulp">
+          <h2>Documenthulp</h2>
+          <div class="row wrap insight-menu">
+            <button id="insightTabSummary" class="insight-tab active" type="button">Samenvatting</button>
+            <button id="insightTabQuestion" class="insight-tab secondary" type="button">Vragen</button>
+          </div>
+
+          <div id="summaryPane" class="insight-pane active">
+            <button id="summarizeBtn" type="button">Maak samenvatting</button>
+            <div id="summaryOutput" class="output muted">Nog geen samenvatting.</div>
+          </div>
+
+          <div id="questionPane" class="insight-pane">
+            <input id="questionInput" type="text" placeholder="Bijv. Welke deadlines worden genoemd?" />
+            <button id="askBtn" type="button" class="secondary">Stel vraag</button>
+            <div id="answerOutput" class="output muted">Nog geen vraag gesteld.</div>
+          </div>
+        </section>
+      </main>
+
+    </div>
+
+    <script
+      src="https://cdn.jsdelivr.net/npm/mammoth@1.9.0/mammoth.browser.min.js"
+      defer
+    ></script>
+    <script src="./app.js" type="module"></script>
+  </body>
+</html>
