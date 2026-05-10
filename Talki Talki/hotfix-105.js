@@ -1,14 +1,15 @@
 (() => {
-  const HOTFIX_VERSION = "v2026-05-10.6";
+  const HOTFIX_VERSION = "v2026-05-10.7";
   const TTS_RETRIES = 5;
   const TTS_RETRY_DELAY_MS = 1200;
   const TTS_FETCH_TIMEOUT_MS = 25000;
   const TTS_PATH = "/api/tts";
-  const TTS_MAX_INPUT_CHARS = 420;
+  const TTS_MAX_INPUT_CHARS = 520;
 
   const originalFetch = window.fetch.bind(window);
   const ttsControllers = new Set();
   let suppressTtsUntil = 0;
+  let carryOverText = "";
 
   function now() {
     return Date.now();
@@ -80,6 +81,27 @@
       return candidate.slice(0, lastSpace).trim();
     }
     return candidate.trim();
+  }
+
+  function prepareInputWindow(rawInput, maxChars) {
+    const normalizedInput = String(rawInput || "").replace(/\s+/g, " ").trim();
+    const merged = [carryOverText, normalizedInput].filter(Boolean).join(" ").trim();
+    if (!merged) {
+      return { text: "", tail: "" };
+    }
+    if (merged.length <= maxChars) {
+      return { text: merged, tail: "" };
+    }
+
+    const head = clampInputText(merged, maxChars);
+    const tail = merged.slice(head.length).trim();
+
+    // Avoid dropping tiny endings by keeping them in the current request.
+    if (tail.length > 0 && tail.length < 18 && merged.length <= maxChars + 18) {
+      return { text: merged, tail: "" };
+    }
+
+    return { text: head, tail };
   }
 
   async function resilientTtsFetch(input, init = {}) {
@@ -155,10 +177,21 @@
       }
     }
 
-    if (payload && typeof payload.input === "string" && payload.input.length > TTS_MAX_INPUT_CHARS) {
-      payload.input = clampInputText(payload.input, TTS_MAX_INPUT_CHARS);
-      setFileStatus("Audio ophalen (stabiele modus)...");
+    if (payload && typeof payload.input === "string") {
+      const prepared = prepareInputWindow(payload.input, TTS_MAX_INPUT_CHARS);
+      payload.input = prepared.text;
+      if (prepared.tail) {
+        setFileStatus("Audio ophalen (stabiele modus)...");
+      }
       init = { ...(init || {}), body: JSON.stringify(payload) };
+
+      const response = await resilientTtsFetch(input, init);
+      if (response.ok) {
+        carryOverText = prepared.tail;
+      } else {
+        carryOverText = "";
+      }
+      return response;
     }
 
     return resilientTtsFetch(input, init);
@@ -189,6 +222,7 @@
         "click",
         () => {
           clearSuppression();
+          carryOverText = "";
         },
         true
       );
@@ -199,6 +233,7 @@
         "click",
         () => {
           abortAllTts("paused");
+          carryOverText = "";
           setPlaybackStatus("Gepauzeerd");
           setFileStatus("Voorlezen gepauzeerd.");
         },
@@ -211,6 +246,7 @@
         "click",
         () => {
           abortAllTts("stopped");
+          carryOverText = "";
           setPlaybackStatus("Gestopt");
           setFileStatus("Voorlezen gestopt.");
         },
