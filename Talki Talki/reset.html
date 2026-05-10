@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="nl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LeesMee reset</title>
+    <style>
+      body {
+        margin: 0;
+        font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+        display: grid;
+        place-items: center;
+        min-height: 100vh;
+        background: #f6f7fb;
+        color: #1f2937;
+      }
+      .card {
+        background: #fff;
+        border: 1px solid #e5e7eb;
+        border-radius: 14px;
+        padding: 20px;
+        width: min(520px, 92vw);
+        box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
+      }
+      h1 {
+        margin: 0 0 10px;
+        font-size: 1.1rem;
+      }
+      p {
+        margin: 0;
+        line-height: 1.5;
+      }
+      .muted {
+        margin-top: 10px;
+        color: #6b7280;
+        font-size: 0.92rem;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <h1>LeesMee wordt ververst</h1>
+      <p id="status">Oude cache en service worker worden opgeschoond...</p>
+      <p class="muted">Je wordt automatisch doorgestuurd.</p>
+    </div>
+    <script>
+      (async () => {
+        const statusEl = document.getElementById("status");
+        try {
+          if ("serviceWorker" in navigator) {
+            const regs = await navigator.serviceWorker.getRegistrations();
+            await Promise.all(regs.map((reg) => reg.unregister()));
+          }
+          if ("caches" in window) {
+            const keys = await caches.keys();
+            await Promise.all(keys.map((k) => caches.delete(k)));
+          }
+          statusEl.textContent = "Opschonen klaar. Doorsturen...";
+        } catch (err) {
+          statusEl.textContent = "Deels gelukt. We sturen je toch door...";
+        }
+        window.location.replace("/?force=106&fresh=" + Date.now());
+      })();
+    </script>
+  </body>
+</html>
