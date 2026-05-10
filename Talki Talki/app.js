@@ -1,7 +1,14 @@
 const els = {
   planStatus: document.querySelector("#planStatus"),
+  appVersion: document.querySelector("#appVersion"),
+  updateNotice: document.querySelector("#updateNotice"),
+  refreshAppBtn: document.querySelector("#refreshAppBtn"),
   fileInput: document.querySelector("#fileInput"),
   fileStatus: document.querySelector("#fileStatus"),
+  loadIndicator: document.querySelector("#loadIndicator"),
+  loadPhase: document.querySelector("#loadPhase"),
+  loadProgressFill: document.querySelector("#loadProgressFill"),
+  loadProgressText: document.querySelector("#loadProgressText"),
   loadDemo: document.querySelector("#loadDemo"),
   saveDocumentBtn: document.querySelector("#saveDocumentBtn"),
   savedDocsStatus: document.querySelector("#savedDocsStatus"),
@@ -38,12 +45,25 @@ const els = {
 
 const PLAN_KEY = "leesmee_plan_v1";
 const SAVED_DOCS_KEY = "leesmee_saved_docs_v1";
+const APP_VERSION = "v2026-05-10.3";
+const AI_RETRY_ATTEMPTS = 3;
+const AI_RETRY_DELAY_MS = 900;
 const PLAN_LIMITS = {
   free: 5,
   premium: 50,
   zakelijk: 250,
 };
 const AI_TTS_ENDPOINT = "/api/tts";
+const MAX_DOCUMENT_CHARS = 350000;
+const MAX_PDF_PAGES = 220;
+const CHUNK_MAX_CHARS = 900;
+const PLAYBACK_STATES = {
+  IDLE: "idle",
+  LOADING: "loading",
+  PLAYING: "playing",
+  PAUSED: "paused",
+  STOPPING: "stopping",
+};
 
 const STYLE_PRESETS = {
   calm: { rate: 1.0, pitch: 0.95 },
@@ -108,9 +128,13 @@ const state = {
   aiAudio: null,
   aiResolve: null,
   playbackSessionId: 0,
+  playbackState: PLAYBACK_STATES.IDLE,
+  pendingServiceWorker: null,
   plan: loadPlan(),
   savedDocuments: loadSavedDocuments(),
   summaryCache: null,
+  documentWasTrimmed: false,
+  originalDocumentLength: 0,
 };
 
 let pdfModulePromise = null;
@@ -120,20 +144,20 @@ init();
 function init() {
   bindEvents();
   applyUrlIntents();
+  renderAppVersion();
   updatePlanBadge();
   renderSavedDocuments();
   applyStylePreset(els.styleSelect.value);
   refreshRanges();
   setInsightTab("summary");
   setPlaybackStatus("Gestopt");
+  setLoadProgress("Wacht op bestand", 0);
   updatePlaybackProgress();
   syncPlaybackButtons();
 
   if ("serviceWorker" in navigator) {
     window.addEventListener("load", () => {
-      navigator.serviceWorker.register("./sw.js").catch(() => {
-        // stil falen: app werkt ook zonder service worker
-      });
+      registerServiceWorker();
     });
   }
 }
@@ -141,8 +165,10 @@ function init() {
 function bindEvents() {
   els.fileInput.addEventListener("change", onFileChange);
   els.loadDemo.addEventListener("click", () => {
-    loadDocument(DEMO_TEXT, "Voorbeeldtekst");
+    setLoadProgress("Inlezen", 55);
+    void loadDocument(DEMO_TEXT, "Voorbeeldtekst");
   });
+  els.refreshAppBtn?.addEventListener("click", refreshToLatestVersion);
   els.saveDocumentBtn.addEventListener("click", saveCurrentDocument);
   els.savedDocumentsList.addEventListener("click", onSavedDocumentsClick);
 
@@ -161,7 +187,11 @@ function bindEvents() {
     if (!state.rawText) {
       return;
     }
-    processDocument();
+    setStatus("Filter wordt toegepast...");
+    void processDocument().then(() => {
+      setLoadProgress("Klaar", 100);
+      setStatus(`Filter toegepast (${state.chunks.length} luisterblokken).`);
+    });
   });
 
   els.playBtn.addEventListener("click", startPlayback);
@@ -376,7 +406,7 @@ function openSavedDocument(docId) {
   if (!doc) {
     return;
   }
-  loadDocument(doc.text, doc.name);
+  void loadDocument(doc.text, doc.name);
 }
 
 function deleteSavedDocument(docId) {
@@ -436,9 +466,11 @@ async function onFileChange(event) {
   }
 
   const file = input.files[0];
+  setLoadProgress("Inlezen", 5);
   setStatus(`${file.name} wordt ingelezen...`);
   const text = await extractTextFromFile(file);
   if (!text) {
+    setLoadProgress("Mislukt", 0);
     const lower = file.name.toLowerCase();
     if (lower.endsWith(".pdf")) {
       setStatus(
@@ -458,7 +490,9 @@ async function onFileChange(event) {
     return;
   }
 
-  loadDocument(text, file.name);
+  setLoadProgress("Inlezen", 55);
+  await waitForUi();
+  await loadDocument(text, file.name);
 }
 
 async function extractTextFromFile(file) {
@@ -467,6 +501,7 @@ async function extractTextFromFile(file) {
   const kind = await detectFileKind(file, name, type);
 
   if (kind === "text") {
+    setLoadProgress("Inlezen", 28);
     return file.text();
   }
 
@@ -535,8 +570,11 @@ async function extractDocxText(file) {
   }
 
   try {
+    setLoadProgress("Inlezen", 20);
     const arrayBuffer = await file.arrayBuffer();
+    setLoadProgress("Inlezen", 42);
     const result = await window.mammoth.extractRawText({ arrayBuffer });
+    setLoadProgress("Inlezen", 55);
     return result.value || null;
   } catch {
     return null;
@@ -545,6 +583,7 @@ async function extractDocxText(file) {
 
 async function extractPdfText(file) {
   try {
+    setLoadProgress("Inlezen", 12);
     if (!pdfModulePromise) {
       pdfModulePromise = import(
         "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.4.168/legacy/build/pdf.mjs"
@@ -563,8 +602,15 @@ async function extractPdfText(file) {
       })
       .promise;
     const pages = [];
+    const pagesToRead = Math.min(doc.numPages, MAX_PDF_PAGES);
 
-    for (let pageNumber = 1; pageNumber <= doc.numPages; pageNumber += 1) {
+    for (let pageNumber = 1; pageNumber <= pagesToRead; pageNumber += 1) {
+      const percent = 12 + Math.round((pageNumber / pagesToRead) * 43);
+      setLoadProgress("Inlezen", percent);
+      if (pageNumber === 1 || pageNumber % 10 === 0 || pageNumber === pagesToRead) {
+        setStatus(`PDF wordt gelezen (${pageNumber}/${pagesToRead} pagina's)...`);
+        await waitForUi();
+      }
       const page = await doc.getPage(pageNumber);
       const content = await page.getTextContent({ normalizeWhitespace: true });
       const pageText = content.items
@@ -583,22 +629,42 @@ async function extractPdfText(file) {
   }
 }
 
-function loadDocument(text, sourceName) {
+async function loadDocument(text, sourceName) {
   stopPlayback();
   state.sourceName = sourceName;
-  state.rawText = normalizeText(text);
+  const normalizedText = normalizeText(text);
+  const clamped = clampDocumentText(normalizedText);
+  state.rawText = clamped.text;
+  state.documentWasTrimmed = clamped.trimmed;
+  state.originalDocumentLength = clamped.originalLength;
   setStatus(`${sourceName} wordt verwerkt...`);
-  setTimeout(() => {
-    processDocument();
-    setStatus(`${sourceName} geladen (${state.chunks.length} luisterblokken).`);
-  }, 0);
+  setLoadProgress("Opdelen", 60);
+  await waitForUi();
+  await processDocument();
+  setLoadProgress("Klaar", 100);
+  if (state.documentWasTrimmed) {
+    setStatus(
+      `${sourceName} geladen (${state.chunks.length} luisterblokken). Document is voor stabiliteit ingekort van ${state.originalDocumentLength.toLocaleString(
+        "nl-NL"
+      )} naar ${MAX_DOCUMENT_CHARS.toLocaleString("nl-NL")} tekens.`
+    );
+    return;
+  }
+  setStatus(`${sourceName} geladen (${state.chunks.length} luisterblokken).`);
 }
 
-function processDocument() {
+async function processDocument() {
+  setLoadProgress("Opdelen", 62);
+  await waitForUi();
   const cleaned = cleanDocumentText(state.rawText, els.filterToggle.checked);
+  setLoadProgress("Opdelen", 70);
+  await waitForUi();
   state.cleanedText = cleaned.text;
   state.chapters = cleaned.chapters;
-  state.chunks = buildChunks(cleaned.text, cleaned.chapters);
+  state.chunks = await buildChunks(cleaned.text, cleaned.chapters, (fraction) => {
+    const percentage = 70 + Math.round(Math.min(Math.max(fraction, 0), 1) * 28);
+    setLoadProgress("Opdelen", percentage);
+  });
   state.summaryCache = null;
   state.currentIndex = 0;
   state.currentChunkId = state.chunks[0]?.id || "";
@@ -607,6 +673,23 @@ function processDocument() {
 
 function normalizeText(text) {
   return text.replace(/\r\n?/g, "\n").replace(/\t/g, " ").replace(/ {2,}/g, " ").trim();
+}
+
+function clampDocumentText(text) {
+  const originalLength = text.length;
+  if (originalLength <= MAX_DOCUMENT_CHARS) {
+    return {
+      text,
+      trimmed: false,
+      originalLength,
+    };
+  }
+
+  return {
+    text: text.slice(0, MAX_DOCUMENT_CHARS).trim(),
+    trimmed: true,
+    originalLength,
+  };
 }
 
 function cleanDocumentText(text, applySmartFilter) {
@@ -706,7 +789,7 @@ function looksLikeHeading(line) {
   return !/[.!?]$/.test(line) && words.length <= 8;
 }
 
-function buildChunks(text, chapters) {
+async function buildChunks(text, chapters, onProgress) {
   const chunks = [];
   let currentText = "";
   let chunkStart = 0;
@@ -729,7 +812,8 @@ function buildChunks(text, chapters) {
   };
 
   const lines = text.split("\n");
-  for (const line of lines) {
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+    const line = lines[lineIndex];
     const baseCursor = cursor;
     const trimmed = line.trim();
     cursor += line.length + 1;
@@ -738,9 +822,10 @@ function buildChunks(text, chapters) {
       continue;
     }
 
-    const sentences = (trimmed.match(/[^.!?]+[.!?]?/g) || [trimmed])
+    const sentenceParts = (trimmed.match(/[^.!?]+[.!?]?/g) || [trimmed])
       .map((part) => part.replace(/\s+/g, " ").trim())
       .filter(Boolean);
+    const sentences = sentenceParts.flatMap((part) => splitSentenceByMaxLength(part, CHUNK_MAX_CHARS));
 
     for (const sentence of sentences) {
       if (!currentText) {
@@ -749,7 +834,7 @@ function buildChunks(text, chapters) {
         continue;
       }
 
-      if (currentText.length + sentence.length + 1 > 900) {
+      if (currentText.length + sentence.length + 1 > CHUNK_MAX_CHARS) {
         flush();
         currentText = sentence;
         chunkStart = baseCursor;
@@ -757,10 +842,58 @@ function buildChunks(text, chapters) {
         currentText += ` ${sentence}`;
       }
     }
+
+    if (typeof onProgress === "function") {
+      const ratio = lines.length ? (lineIndex + 1) / lines.length : 1;
+      onProgress(ratio);
+    }
+
+    if (lineIndex % 120 === 0) {
+      await waitForUi();
+    }
   }
 
   flush();
+  if (typeof onProgress === "function") {
+    onProgress(1);
+  }
   return chunks;
+}
+
+function splitSentenceByMaxLength(sentence, maxLength) {
+  if (sentence.length <= maxLength) {
+    return [sentence];
+  }
+
+  const words = sentence.split(/\s+/).filter(Boolean);
+  if (!words.length) {
+    return sentence.match(new RegExp(`.{1,${maxLength}}`, "g")) || [sentence];
+  }
+
+  const parts = [];
+  let current = "";
+
+  for (const word of words) {
+    if (!current) {
+      current = word;
+      continue;
+    }
+
+    if (current.length + word.length + 1 > maxLength) {
+      parts.push(current);
+      current = word;
+    } else {
+      current += ` ${word}`;
+    }
+  }
+
+  if (current) {
+    parts.push(current);
+  }
+
+  return parts.flatMap((part) =>
+    part.length <= maxLength ? [part] : part.match(new RegExp(`.{1,${maxLength}}`, "g")) || [part]
+  );
 }
 
 function findChapterIndex(position, chapters) {
@@ -847,9 +980,11 @@ function applyStylePreset(name) {
 }
 
 async function testVoice() {
-  const ok = await speakWithAi(
-    sampleTestSentence()
-  );
+  if (state.playbackState !== PLAYBACK_STATES.IDLE) {
+    setStatus("Stop eerst het voorlezen voordat je de stemtest start.");
+    return;
+  }
+  const ok = await speakWithAi(sampleTestSentence());
   if (!ok) {
     setStatus(
       "AI-stemtest mislukt. Controleer Netlify Function en OPENAI_API_KEY in Netlify."
@@ -858,7 +993,13 @@ async function testVoice() {
 }
 
 function startPlayback() {
-  if (state.speaking && !state.paused) {
+  if (state.playbackState === PLAYBACK_STATES.LOADING || state.playbackState === PLAYBACK_STATES.STOPPING) {
+    setStatus("Even geduld, de speler verwerkt nog een actie.");
+    syncPlaybackButtons();
+    return;
+  }
+
+  if (state.playbackState === PLAYBACK_STATES.PLAYING) {
     setStatus("Voorlezen is al bezig.");
     syncPlaybackButtons();
     return;
@@ -871,24 +1012,34 @@ function startPlayback() {
     return;
   }
 
-  if (state.paused && state.aiAudio) {
-    state.aiAudio.play().catch(() => {
-      setStatus("Hervatten lukt niet. Tik opnieuw op Start.");
-    });
-    state.paused = false;
-    state.speaking = true;
-    setStatus("Voorlezen hervat.");
-    setPlaybackStatus("Bezig met afspelen");
+  if (state.playbackState === PLAYBACK_STATES.PAUSED && state.aiAudio) {
+    setPlaybackStatus("Hervatten...");
     syncPlaybackButtons();
+    state.aiAudio
+      .play()
+      .then(() => {
+        setPlaybackState(PLAYBACK_STATES.PLAYING);
+        setStatus("Voorlezen hervat.");
+        setPlaybackStatus("Bezig met afspelen");
+        syncPlaybackButtons();
+      })
+      .catch(() => {
+        setPlaybackState(PLAYBACK_STATES.PAUSED);
+        setPlaybackStatus("Gepauzeerd");
+        syncPlaybackButtons();
+        setStatus("Hervatten lukt niet. Tik opnieuw op Start.");
+      });
     return;
   }
-  setPlaybackStatus("Starten...");
+  setPlaybackState(PLAYBACK_STATES.LOADING);
+  setPlaybackStatus("Audio ophalen...");
   syncPlaybackButtons();
-  startAiPlayback();
+  void startAiPlayback();
 }
 
 async function startAiPlayback() {
   if (!state.activeChunks.length) {
+    setPlaybackState(PLAYBACK_STATES.IDLE);
     syncPlaybackButtons();
     return;
   }
@@ -897,14 +1048,13 @@ async function startAiPlayback() {
   state.playbackSessionId += 1;
   const sessionId = state.playbackSessionId;
   state.stopRequested = false;
-  state.paused = false;
-  state.speaking = true;
   state.currentIndex = safeIndex;
-  setPlaybackStatus("Bezig met afspelen");
+  setPlaybackState(PLAYBACK_STATES.LOADING);
+  setPlaybackStatus("Audio ophalen...");
   updatePlaybackProgress();
   syncPlaybackButtons();
 
-  let nextBlobPromise = fetchAiAudioBlob(state.activeChunks[safeIndex].text);
+  let nextBlobPromise = fetchAiAudioBlob(state.activeChunks[safeIndex].text, sessionId);
 
   for (let index = safeIndex; index < state.activeChunks.length; index += 1) {
     if (state.stopRequested || sessionId !== state.playbackSessionId) {
@@ -923,7 +1073,7 @@ async function startAiPlayback() {
       return;
     }
     if (!audioBlob) {
-      state.speaking = false;
+      setPlaybackState(PLAYBACK_STATES.IDLE);
       setPlaybackStatus("Gestopt");
       syncPlaybackButtons();
       return;
@@ -932,19 +1082,23 @@ async function startAiPlayback() {
     const nextIndex = index + 1;
     nextBlobPromise =
       nextIndex < state.activeChunks.length
-        ? fetchAiAudioBlob(state.activeChunks[nextIndex].text)
+        ? fetchAiAudioBlob(state.activeChunks[nextIndex].text, sessionId)
         : null;
 
+    setPlaybackState(PLAYBACK_STATES.PLAYING);
+    setPlaybackStatus("Bezig met afspelen");
     const ok = await playAudioBlob(audioBlob, sessionId);
     if (!ok) {
-      state.speaking = false;
-      setPlaybackStatus("Gestopt");
+      if (!state.stopRequested && sessionId === state.playbackSessionId) {
+        setPlaybackState(PLAYBACK_STATES.IDLE);
+        setPlaybackStatus("Gestopt");
+      }
       syncPlaybackButtons();
       return;
     }
   }
 
-  state.speaking = false;
+  setPlaybackState(PLAYBACK_STATES.IDLE);
   setStatus("Klaar met voorlezen.");
   setPlaybackStatus("Klaar");
   updatePlaybackProgress(true);
@@ -952,39 +1106,60 @@ async function startAiPlayback() {
 }
 
 function togglePause() {
-  if (!state.aiAudio && state.speaking) {
+  if (state.playbackState === PLAYBACK_STATES.LOADING) {
+    setStatus("Audio wordt nog opgehaald. Gebruik Stop om direct te annuleren.");
+    syncPlaybackButtons();
+    return;
+  }
+
+  if (!state.aiAudio && state.playbackState === PLAYBACK_STATES.PLAYING) {
     state.stopRequested = true;
-    state.paused = true;
-    state.speaking = false;
+    setPlaybackState(PLAYBACK_STATES.PAUSED);
     setStatus("Pauze aangevraagd...");
     setPlaybackStatus("Gepauzeerd");
     syncPlaybackButtons();
     return;
   }
 
-  if (state.aiAudio && !state.aiAudio.paused) {
+  if (state.aiAudio && state.playbackState === PLAYBACK_STATES.PLAYING && !state.aiAudio.paused) {
     state.aiAudio.pause();
-    state.paused = true;
-    state.speaking = false;
+    setPlaybackState(PLAYBACK_STATES.PAUSED);
     setStatus("Voorlezen gepauzeerd.");
     setPlaybackStatus("Gepauzeerd");
     syncPlaybackButtons();
     return;
   }
 
-  if (state.aiAudio && state.paused) {
-    state.aiAudio.play().catch(() => {
-      setStatus("Hervatten lukt niet. Tik opnieuw op Start.");
-    });
-    state.paused = false;
-    state.speaking = true;
-    setStatus("Voorlezen hervat.");
-    setPlaybackStatus("Bezig met afspelen");
+  if (state.aiAudio && state.playbackState === PLAYBACK_STATES.PAUSED) {
+    setPlaybackStatus("Hervatten...");
     syncPlaybackButtons();
+    state.aiAudio
+      .play()
+      .then(() => {
+        setPlaybackState(PLAYBACK_STATES.PLAYING);
+        setStatus("Voorlezen hervat.");
+        setPlaybackStatus("Bezig met afspelen");
+        syncPlaybackButtons();
+      })
+      .catch(() => {
+        setPlaybackState(PLAYBACK_STATES.PAUSED);
+        setPlaybackStatus("Gepauzeerd");
+        syncPlaybackButtons();
+        setStatus("Hervatten lukt niet. Tik opnieuw op Start.");
+      });
+    return;
   }
+
+  syncPlaybackButtons();
 }
 
 function stopPlayback() {
+  if (state.playbackState === PLAYBACK_STATES.STOPPING) {
+    return;
+  }
+
+  setPlaybackState(PLAYBACK_STATES.STOPPING);
+  syncPlaybackButtons();
   state.playbackSessionId += 1;
   if (typeof state.aiResolve === "function") {
     state.aiResolve(false);
@@ -995,16 +1170,24 @@ function stopPlayback() {
     state.aiAudio = null;
   }
   state.stopRequested = true;
-  state.paused = false;
-  state.speaking = false;
+  setPlaybackState(PLAYBACK_STATES.IDLE);
   setPlaybackStatus("Gestopt");
   updatePlaybackProgress();
   syncPlaybackButtons();
 }
 
-async function fetchAiAudioBlob(text) {
+async function fetchAiAudioBlob(text, sessionId = state.playbackSessionId, attempt = 1) {
+  if (state.stopRequested || sessionId !== state.playbackSessionId) {
+    return null;
+  }
+
   try {
-    setStatus("AI-stem maakt audio...");
+    if (attempt === 1) {
+      setStatus("AI-stem maakt audio...");
+    } else {
+      setStatus(`AI-stem nieuwe poging ${attempt}/${AI_RETRY_ATTEMPTS}...`);
+    }
+
     const response = await fetch(AI_TTS_ENDPOINT, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1018,6 +1201,14 @@ async function fetchAiAudioBlob(text) {
 
     if (!response.ok) {
       const body = await response.text();
+      if (shouldRetryVoiceRequest(response.status, attempt)) {
+        const retryInMs = AI_RETRY_DELAY_MS * attempt;
+        setStatus(
+          `AI-stem tijdelijk fout (${response.status}). Opnieuw proberen over ${Math.round(retryInMs / 1000)} sec...`
+        );
+        await sleep(retryInMs);
+        return fetchAiAudioBlob(text, sessionId, attempt + 1);
+      }
       setStatus(`AI-stem fout (${response.status}): ${body || "onbekend"}`);
       return null;
     }
@@ -1029,6 +1220,14 @@ async function fetchAiAudioBlob(text) {
     }
     return audioBlob;
   } catch {
+    if (attempt < AI_RETRY_ATTEMPTS) {
+      const retryInMs = AI_RETRY_DELAY_MS * attempt;
+      setStatus(
+        `AI-stem tijdelijk onbereikbaar. Opnieuw proberen over ${Math.round(retryInMs / 1000)} sec...`
+      );
+      await sleep(retryInMs);
+      return fetchAiAudioBlob(text, sessionId, attempt + 1);
+    }
     setStatus("AI-stem niet bereikbaar. Controleer internet en Netlify Function.");
     return null;
   }
@@ -1380,6 +1579,40 @@ function answerQuestion(question) {
   ].join("\n");
 }
 
+function renderAppVersion() {
+  if (!els.appVersion) {
+    return;
+  }
+  els.appVersion.textContent = `Versie ${APP_VERSION}`;
+}
+
+function setLoadProgress(phase, percent) {
+  if (!els.loadIndicator || !els.loadPhase || !els.loadProgressFill || !els.loadProgressText) {
+    return;
+  }
+  const safePercent = Math.max(0, Math.min(100, Math.round(percent)));
+  els.loadIndicator.classList.remove("hidden");
+  els.loadPhase.textContent = `Laden: ${phase}`;
+  els.loadProgressFill.style.width = `${safePercent}%`;
+  els.loadProgressText.textContent = `${safePercent}%`;
+}
+
+function setPlaybackState(nextState) {
+  state.playbackState = nextState;
+  if (nextState === PLAYBACK_STATES.PLAYING) {
+    state.speaking = true;
+    state.paused = false;
+    return;
+  }
+  if (nextState === PLAYBACK_STATES.PAUSED) {
+    state.speaking = false;
+    state.paused = true;
+    return;
+  }
+  state.speaking = false;
+  state.paused = false;
+}
+
 function setStatus(message) {
   els.fileStatus.textContent = message;
 }
@@ -1412,19 +1645,94 @@ function updatePlaybackProgress(forceComplete = false) {
 
 function syncPlaybackButtons() {
   const hasAudio = state.activeChunks.length > 0;
-  const isRunning = state.speaking && !state.paused;
-  const isPaused = state.paused;
-  const canControlPlayback = state.speaking || state.paused;
+  const isIdle = state.playbackState === PLAYBACK_STATES.IDLE;
+  const isLoading = state.playbackState === PLAYBACK_STATES.LOADING;
+  const isPlaying = state.playbackState === PLAYBACK_STATES.PLAYING;
+  const isPaused = state.playbackState === PLAYBACK_STATES.PAUSED;
+  const isStopping = state.playbackState === PLAYBACK_STATES.STOPPING;
+  const isBusy = isLoading || isStopping;
 
-  els.playBtn.disabled = !hasAudio || isRunning;
-  els.pauseBtn.disabled = !canControlPlayback;
-  els.stopBtn.disabled = !canControlPlayback;
-  els.backBtn.disabled = !hasAudio;
-  els.nextHeadingBtn.disabled = !hasAudio;
+  els.playBtn.disabled = !hasAudio || isPlaying || isLoading || isStopping;
+  els.pauseBtn.disabled = !isPlaying && !isPaused;
+  els.stopBtn.disabled = isIdle || !hasAudio;
+  els.backBtn.disabled = !hasAudio || isBusy;
+  els.nextHeadingBtn.disabled = !hasAudio || isBusy;
+  els.pauseBtn.textContent = isPaused ? "Hervat" : "Pauze";
 
   if (isPaused && hasAudio) {
     els.playBtn.disabled = false;
   }
+}
+
+function shouldRetryVoiceRequest(statusCode, attempt) {
+  if (attempt >= AI_RETRY_ATTEMPTS) {
+    return false;
+  }
+  return statusCode === 429 || statusCode >= 500;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
+function waitForUi() {
+  return new Promise((resolve) => {
+    if (typeof window.requestAnimationFrame === "function") {
+      window.requestAnimationFrame(() => resolve());
+      return;
+    }
+    window.setTimeout(resolve, 16);
+  });
+}
+
+async function registerServiceWorker() {
+  try {
+    const registration = await navigator.serviceWorker.register("./sw.js");
+    wireServiceWorkerUpdates(registration);
+  } catch {
+    // stil falen: app werkt ook zonder service worker
+  }
+}
+
+function wireServiceWorkerUpdates(registration) {
+  const showUpdate = (worker) => {
+    if (!els.updateNotice || !worker) {
+      return;
+    }
+    state.pendingServiceWorker = worker;
+    els.updateNotice.classList.remove("hidden");
+  };
+
+  if (registration.waiting) {
+    showUpdate(registration.waiting);
+  }
+
+  registration.addEventListener("updatefound", () => {
+    const worker = registration.installing;
+    if (!worker) {
+      return;
+    }
+    worker.addEventListener("statechange", () => {
+      if (worker.state === "installed" && navigator.serviceWorker.controller) {
+        showUpdate(worker);
+      }
+    });
+  });
+
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    window.location.reload();
+  });
+}
+
+function refreshToLatestVersion() {
+  const worker = state.pendingServiceWorker;
+  if (worker) {
+    worker.postMessage({ type: "SKIP_WAITING" });
+    return;
+  }
+  window.location.reload();
 }
 
 function capitalize(value) {
