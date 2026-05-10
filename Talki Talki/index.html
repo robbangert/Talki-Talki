@@ -22,8 +22,8 @@
           </p>
         </div>
         <div class="hero-actions">
-          <p id="planStatus" class="plan-pill">Plan: Free</p>
-          <a class="pricing-link" href="./pricing.html">Prijzen</a>
+          <p id="planStatus" class="plan-pill hidden">Plan: Free</p>
+          <a class="pricing-link hidden" href="./pricing.html">Prijzen</a>
         </div>
       </header>
 
@@ -36,7 +36,7 @@
           </label>
           <p id="fileStatus" class="muted">Nog geen bestand geladen.</p>
           <div class="row">
-            <button id="loadDemo" type="button" class="secondary">Laad voorbeeld</button>
+            <button id="loadDemo" type="button" class="secondary hidden">Laad voorbeeld</button>
             <button id="saveDocumentBtn" type="button" class="ghost">Sla document op</button>
           </div>
           <p id="savedDocsStatus" class="muted">0 / 5 opgeslagen documenten</p>
@@ -72,12 +72,8 @@
               <select id="aiVoiceSelect">
                 <option value="alloy">Alloy</option>
                 <option value="marin" selected>Marin</option>
-                <option value="cedar">Cedar</option>
+                <option value="cedar">Ceder</option>
                 <option value="coral">Coral</option>
-                <option value="verse">Verse</option>
-                <option value="shimmer">Shimmer</option>
-                <option value="nova">Nova</option>
-                <option value="sage">Sage</option>
               </select>
             </label>
             <label>
@@ -111,23 +107,20 @@
             <button id="backBtn" type="button" class="ghost">15 sec terug</button>
             <button id="nextHeadingBtn" type="button" class="ghost">Volgende kop</button>
           </div>
+          <p id="playbackStatus" class="playback-status">Afspeelstatus: Gestopt</p>
+          <div class="player-progress" aria-hidden="true">
+            <div id="playerProgressFill" class="player-progress-fill"></div>
+          </div>
+          <p id="playerProgressText" class="muted player-progress-text">Voortgang: 0 / 0</p>
           <label class="toggle">
             <input id="filterToggle" type="checkbox" checked />
             Kopteksten, voetteksten en paginanummers slim negeren
           </label>
-
-          <h2>Focus</h2>
-          <div class="row wrap">
-            <button class="mode-btn active" data-mode="full" type="button">Volledig</button>
-            <button class="mode-btn" data-mode="summary" type="button">Samenvatting</button>
-            <button class="mode-btn" data-mode="chapters" type="button">Per hoofdstuk</button>
-            <button class="mode-btn" data-mode="conclusions" type="button">Conclusies</button>
-          </div>
         </section>
 
         <section class="panel insights" aria-label="Documenthulp">
-          <h2>Documenthulp</h2>
-          <div class="row wrap insight-menu">
+          <h2>Samenvatting</h2>
+          <div class="row wrap insight-menu hidden">
             <button id="insightTabSummary" class="insight-tab active" type="button">Samenvatting</button>
             <button id="insightTabQuestion" class="insight-tab secondary" type="button">Vragen</button>
           </div>
@@ -137,7 +130,7 @@
             <div id="summaryOutput" class="output muted">Nog geen samenvatting.</div>
           </div>
 
-          <div id="questionPane" class="insight-pane">
+          <div id="questionPane" class="insight-pane hidden">
             <input id="questionInput" type="text" placeholder="Bijv. Welke deadlines worden genoemd?" />
             <button id="askBtn" type="button" class="secondary">Stel vraag</button>
             <div id="answerOutput" class="output muted">Nog geen vraag gesteld.</div>

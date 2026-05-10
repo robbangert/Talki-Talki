@@ -249,6 +249,47 @@ button.ghost {
   margin: 0.5rem 0;
 }
 
+.hidden {
+  display: none !important;
+}
+
+.playback-status {
+  margin: 0.55rem 0 0;
+  border: 1px solid #cfe4dc;
+  border-radius: 10px;
+  padding: 0.45rem 0.6rem;
+  background: #f3fcf8;
+  color: #225e50;
+  font-weight: 600;
+}
+
+.player-progress {
+  margin-top: 0.45rem;
+  height: 10px;
+  border-radius: 999px;
+  border: 1px solid #c8d8e9;
+  background: #eef3fb;
+  overflow: hidden;
+}
+
+.player-progress-fill {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, #0f8c7c, #3bb0a1);
+  transition: width 160ms ease;
+}
+
+.player-progress-text {
+  margin: 0.35rem 0 0;
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  transform: none !important;
+  filter: none !important;
+}
+
 .toggle {
   display: flex;
   gap: 0.6rem;

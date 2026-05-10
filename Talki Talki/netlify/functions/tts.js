@@ -19,18 +19,9 @@ exports.handler = async (event) => {
   try {
     const ALLOWED_VOICES = new Set([
       "alloy",
-      "ash",
-      "ballad",
       "cedar",
       "coral",
-      "echo",
-      "fable",
       "marin",
-      "nova",
-      "onyx",
-      "sage",
-      "shimmer",
-      "verse",
     ]);
 
     const payload = JSON.parse(event.body || "{}");

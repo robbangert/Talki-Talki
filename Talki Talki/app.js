@@ -21,6 +21,9 @@ const els = {
   stopBtn: document.querySelector("#stopBtn"),
   backBtn: document.querySelector("#backBtn"),
   nextHeadingBtn: document.querySelector("#nextHeadingBtn"),
+  playbackStatus: document.querySelector("#playbackStatus"),
+  playerProgressFill: document.querySelector("#playerProgressFill"),
+  playerProgressText: document.querySelector("#playerProgressText"),
   insightTabSummary: document.querySelector("#insightTabSummary"),
   insightTabQuestion: document.querySelector("#insightTabQuestion"),
   summaryPane: document.querySelector("#summaryPane"),
@@ -43,7 +46,7 @@ const PLAN_LIMITS = {
 const AI_TTS_ENDPOINT = "/api/tts";
 
 const STYLE_PRESETS = {
-  calm: { rate: 0.9, pitch: 0.95 },
+  calm: { rate: 1.0, pitch: 0.95 },
   business: { rate: 1.0, pitch: 1.0 },
   warm: { rate: 0.95, pitch: 1.1 },
   energy: { rate: 1.15, pitch: 1.12 },
@@ -122,6 +125,9 @@ function init() {
   applyStylePreset(els.styleSelect.value);
   refreshRanges();
   setInsightTab("summary");
+  setPlaybackStatus("Gestopt");
+  updatePlaybackProgress();
+  syncPlaybackButtons();
 
   if ("serviceWorker" in navigator) {
     window.addEventListener("load", () => {
@@ -743,7 +749,7 @@ function buildChunks(text, chapters) {
         continue;
       }
 
-      if (currentText.length + sentence.length + 1 > 260) {
+      if (currentText.length + sentence.length + 1 > 900) {
         flush();
         currentText = sentence;
         chunkStart = baseCursor;
@@ -787,6 +793,8 @@ function setMode(mode, keepIndex = false) {
   }
 
   highlightCurrentChunk();
+  updatePlaybackProgress();
+  syncPlaybackButtons();
 }
 
 function rebuildActiveChunks() {
@@ -850,8 +858,16 @@ async function testVoice() {
 }
 
 function startPlayback() {
+  if (state.speaking && !state.paused) {
+    setStatus("Voorlezen is al bezig.");
+    syncPlaybackButtons();
+    return;
+  }
+
   if (!state.activeChunks.length) {
-    setStatus("Laad eerst tekst en kies daarna een focusmodus.");
+    setStatus("Laad eerst een document.");
+    setPlaybackStatus("Wacht op document");
+    syncPlaybackButtons();
     return;
   }
 
@@ -862,12 +878,21 @@ function startPlayback() {
     state.paused = false;
     state.speaking = true;
     setStatus("Voorlezen hervat.");
+    setPlaybackStatus("Bezig met afspelen");
+    syncPlaybackButtons();
     return;
   }
+  setPlaybackStatus("Starten...");
+  syncPlaybackButtons();
   startAiPlayback();
 }
 
 async function startAiPlayback() {
+  if (!state.activeChunks.length) {
+    syncPlaybackButtons();
+    return;
+  }
+
   const safeIndex = Math.min(Math.max(state.currentIndex, 0), state.activeChunks.length - 1);
   state.playbackSessionId += 1;
   const sessionId = state.playbackSessionId;
@@ -875,33 +900,75 @@ async function startAiPlayback() {
   state.paused = false;
   state.speaking = true;
   state.currentIndex = safeIndex;
+  setPlaybackStatus("Bezig met afspelen");
+  updatePlaybackProgress();
+  syncPlaybackButtons();
+
+  let nextBlobPromise = fetchAiAudioBlob(state.activeChunks[safeIndex].text);
 
   for (let index = safeIndex; index < state.activeChunks.length; index += 1) {
     if (state.stopRequested || sessionId !== state.playbackSessionId) {
+      syncPlaybackButtons();
       return;
     }
 
     state.currentIndex = index;
     state.currentChunkId = state.activeChunks[index].id;
     highlightCurrentChunk();
+    updatePlaybackProgress();
 
-    const ok = await speakWithAi(state.activeChunks[index].text, sessionId);
+    const audioBlob = await nextBlobPromise;
+    if (state.stopRequested || sessionId !== state.playbackSessionId) {
+      syncPlaybackButtons();
+      return;
+    }
+    if (!audioBlob) {
+      state.speaking = false;
+      setPlaybackStatus("Gestopt");
+      syncPlaybackButtons();
+      return;
+    }
+
+    const nextIndex = index + 1;
+    nextBlobPromise =
+      nextIndex < state.activeChunks.length
+        ? fetchAiAudioBlob(state.activeChunks[nextIndex].text)
+        : null;
+
+    const ok = await playAudioBlob(audioBlob, sessionId);
     if (!ok) {
       state.speaking = false;
+      setPlaybackStatus("Gestopt");
+      syncPlaybackButtons();
       return;
     }
   }
 
   state.speaking = false;
   setStatus("Klaar met voorlezen.");
+  setPlaybackStatus("Klaar");
+  updatePlaybackProgress(true);
+  syncPlaybackButtons();
 }
 
 function togglePause() {
+  if (!state.aiAudio && state.speaking) {
+    state.stopRequested = true;
+    state.paused = true;
+    state.speaking = false;
+    setStatus("Pauze aangevraagd...");
+    setPlaybackStatus("Gepauzeerd");
+    syncPlaybackButtons();
+    return;
+  }
+
   if (state.aiAudio && !state.aiAudio.paused) {
     state.aiAudio.pause();
     state.paused = true;
     state.speaking = false;
     setStatus("Voorlezen gepauzeerd.");
+    setPlaybackStatus("Gepauzeerd");
+    syncPlaybackButtons();
     return;
   }
 
@@ -912,6 +979,8 @@ function togglePause() {
     state.paused = false;
     state.speaking = true;
     setStatus("Voorlezen hervat.");
+    setPlaybackStatus("Bezig met afspelen");
+    syncPlaybackButtons();
   }
 }
 
@@ -928,9 +997,12 @@ function stopPlayback() {
   state.stopRequested = true;
   state.paused = false;
   state.speaking = false;
+  setPlaybackStatus("Gestopt");
+  updatePlaybackProgress();
+  syncPlaybackButtons();
 }
 
-async function speakWithAi(text, sessionId = state.playbackSessionId) {
+async function fetchAiAudioBlob(text) {
   try {
     setStatus("AI-stem maakt audio...");
     const response = await fetch(AI_TTS_ENDPOINT, {
@@ -947,20 +1019,27 @@ async function speakWithAi(text, sessionId = state.playbackSessionId) {
     if (!response.ok) {
       const body = await response.text();
       setStatus(`AI-stem fout (${response.status}): ${body || "onbekend"}`);
-      return false;
+      return null;
     }
 
     const audioBlob = await response.blob();
     if (!audioBlob.size) {
       setStatus("AI-stem gaf een lege audioresponse.");
-      return false;
+      return null;
     }
-
-    return playAudioBlob(audioBlob, sessionId);
+    return audioBlob;
   } catch {
     setStatus("AI-stem niet bereikbaar. Controleer internet en Netlify Function.");
+    return null;
+  }
+}
+
+async function speakWithAi(text, sessionId = state.playbackSessionId) {
+  const audioBlob = await fetchAiAudioBlob(text);
+  if (!audioBlob) {
     return false;
   }
+  return playAudioBlob(audioBlob, sessionId);
 }
 
 function playAudioBlob(blob, sessionId) {
@@ -1040,6 +1119,7 @@ function sampleTestSentence() {
 
 function jumpBack() {
   if (!state.activeChunks.length) {
+    syncPlaybackButtons();
     return;
   }
 
@@ -1048,19 +1128,24 @@ function jumpBack() {
   state.currentIndex = Math.max(0, state.currentIndex - 2);
   state.currentChunkId = state.activeChunks[state.currentIndex]?.id || "";
   highlightCurrentChunk();
+  updatePlaybackProgress();
 
   if (shouldContinue) {
     startPlayback();
+    return;
   }
+  syncPlaybackButtons();
 }
 
 function jumpToNextHeading() {
   if (!state.chunks.length) {
+    syncPlaybackButtons();
     return;
   }
 
   const currentChunk = state.activeChunks[state.currentIndex] || state.chunks[0];
   if (!currentChunk) {
+    syncPlaybackButtons();
     return;
   }
 
@@ -1069,6 +1154,7 @@ function jumpToNextHeading() {
 
   if (nextChapter === -1) {
     setStatus("Je bent al bij de laatste kop.");
+    syncPlaybackButtons();
     return;
   }
 
@@ -1078,6 +1164,7 @@ function jumpToNextHeading() {
 function jumpToChapter(chapterIndex, startPlaying) {
   const targetChunk = state.chunks.find((chunk) => chunk.chapterIndex === chapterIndex);
   if (!targetChunk) {
+    syncPlaybackButtons();
     return;
   }
 
@@ -1091,14 +1178,18 @@ function jumpToChapter(chapterIndex, startPlaying) {
   }
 
   highlightCurrentChunk();
+  updatePlaybackProgress();
 
   if (startPlaying) {
     startPlayback();
+    return;
   }
+  syncPlaybackButtons();
 }
 
 function jumpToChunkId(chunkId, resumePlayback) {
   if (!chunkId) {
+    syncPlaybackButtons();
     return;
   }
 
@@ -1110,6 +1201,7 @@ function jumpToChunkId(chunkId, resumePlayback) {
 
   const index = state.activeChunks.findIndex((chunk) => chunk.id === chunkId);
   if (index === -1) {
+    syncPlaybackButtons();
     return;
   }
 
@@ -1118,10 +1210,13 @@ function jumpToChunkId(chunkId, resumePlayback) {
   state.currentIndex = index;
   state.currentChunkId = chunkId;
   highlightCurrentChunk();
+  updatePlaybackProgress();
 
   if (shouldContinue) {
     startPlayback();
+    return;
   }
+  syncPlaybackButtons();
 }
 
 function highlightCurrentChunk() {
@@ -1287,6 +1382,49 @@ function answerQuestion(question) {
 
 function setStatus(message) {
   els.fileStatus.textContent = message;
+}
+
+function setPlaybackStatus(message) {
+  if (!els.playbackStatus) {
+    return;
+  }
+  els.playbackStatus.textContent = `Afspeelstatus: ${message}`;
+}
+
+function updatePlaybackProgress(forceComplete = false) {
+  const total = state.activeChunks.length;
+  if (!els.playerProgressFill || !els.playerProgressText) {
+    return;
+  }
+
+  if (!total) {
+    els.playerProgressFill.style.width = "0%";
+    els.playerProgressText.textContent = "Voortgang: 0 / 0";
+    return;
+  }
+
+  const safeIndex = Math.min(Math.max(state.currentIndex, 0), total - 1);
+  const current = forceComplete ? total : safeIndex + 1;
+  const percent = Math.round((current / total) * 100);
+  els.playerProgressFill.style.width = `${percent}%`;
+  els.playerProgressText.textContent = `Voortgang: ${current} / ${total}`;
+}
+
+function syncPlaybackButtons() {
+  const hasAudio = state.activeChunks.length > 0;
+  const isRunning = state.speaking && !state.paused;
+  const isPaused = state.paused;
+  const canControlPlayback = state.speaking || state.paused;
+
+  els.playBtn.disabled = !hasAudio || isRunning;
+  els.pauseBtn.disabled = !canControlPlayback;
+  els.stopBtn.disabled = !canControlPlayback;
+  els.backBtn.disabled = !hasAudio;
+  els.nextHeadingBtn.disabled = !hasAudio;
+
+  if (isPaused && hasAudio) {
+    els.playBtn.disabled = false;
+  }
 }
 
 function capitalize(value) {
