@@ -87,6 +87,17 @@ h1 {
   font-weight: 700;
 }
 
+.version-pill {
+  margin: 0;
+  border: 1px solid #cfd8e8;
+  background: #fff;
+  color: #2f4668;
+  border-radius: 999px;
+  padding: 0.32rem 0.65rem;
+  font-size: 0.83rem;
+  font-weight: 700;
+}
+
 .pricing-link {
   color: #1f406d;
   text-decoration: none;
@@ -105,6 +116,20 @@ h1 {
   display: grid;
   grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
   gap: 1rem;
+}
+
+.update-notice {
+  margin: 0 0 1rem;
+  border: 1px solid #f3b18f;
+  background: #fff3eb;
+  border-radius: 12px;
+  padding: 0.55rem 0.7rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.7rem;
+  color: #854123;
+  font-weight: 600;
 }
 
 .panel {
@@ -247,6 +272,39 @@ button.ghost {
 .muted {
   color: var(--muted);
   margin: 0.5rem 0;
+}
+
+.load-indicator {
+  margin-top: 0.5rem;
+  border: 1px solid #d7deea;
+  border-radius: 10px;
+  padding: 0.5rem 0.6rem;
+  background: #f8fbff;
+}
+
+.load-phase,
+.load-progress-text {
+  margin: 0;
+}
+
+.load-progress {
+  margin-top: 0.35rem;
+  height: 10px;
+  border-radius: 999px;
+  border: 1px solid #c8d8e9;
+  background: #eef3fb;
+  overflow: hidden;
+}
+
+.load-progress-fill {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, #ff7a45, #0f8c7c);
+  transition: width 160ms ease;
+}
+
+.load-progress-text {
+  margin-top: 0.3rem;
 }
 
 .hidden {
@@ -559,6 +617,11 @@ body.pricing-page {
   .hero-actions > * {
     flex: 1 1 auto;
     text-align: center;
+  }
+
+  .update-notice {
+    flex-direction: column;
+    align-items: stretch;
   }
 }
 

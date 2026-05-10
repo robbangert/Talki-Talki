@@ -24,8 +24,14 @@
         <div class="hero-actions">
           <p id="planStatus" class="plan-pill hidden">Plan: Free</p>
           <a class="pricing-link hidden" href="./pricing.html">Prijzen</a>
+          <p id="appVersion" class="version-pill">Versie --</p>
         </div>
       </header>
+
+      <div id="updateNotice" class="update-notice hidden" role="status" aria-live="polite">
+        <span>Nieuwe versie beschikbaar.</span>
+        <button id="refreshAppBtn" type="button" class="secondary">Nu verversen</button>
+      </div>
 
       <main class="layout">
         <section class="panel controls" aria-label="Bediening">
@@ -35,6 +41,13 @@
             <input id="fileInput" type="file" accept=".txt,.md,.pdf,.doc,.docx,.epub,.html" />
           </label>
           <p id="fileStatus" class="muted">Nog geen bestand geladen.</p>
+          <div id="loadIndicator" class="load-indicator hidden" aria-live="polite">
+            <p id="loadPhase" class="muted load-phase">Laden: wacht op bestand</p>
+            <div class="load-progress" aria-hidden="true">
+              <div id="loadProgressFill" class="load-progress-fill"></div>
+            </div>
+            <p id="loadProgressText" class="muted load-progress-text">0%</p>
+          </div>
           <div class="row">
             <button id="loadDemo" type="button" class="secondary hidden">Laad voorbeeld</button>
             <button id="saveDocumentBtn" type="button" class="ghost">Sla document op</button>
