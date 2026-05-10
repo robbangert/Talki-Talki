@@ -108,18 +108,14 @@
             <button id="nextHeadingBtn" type="button" class="ghost">Volgende kop</button>
           </div>
           <p id="playbackStatus" class="playback-status">Afspeelstatus: Gestopt</p>
+          <div class="player-progress" aria-hidden="true">
+            <div id="playerProgressFill" class="player-progress-fill"></div>
+          </div>
+          <p id="playerProgressText" class="muted player-progress-text">Voortgang: 0 / 0</p>
           <label class="toggle">
             <input id="filterToggle" type="checkbox" checked />
             Kopteksten, voetteksten en paginanummers slim negeren
           </label>
-
-          <h2 class="hidden">Focus</h2>
-          <div class="row wrap hidden">
-            <button class="mode-btn active" data-mode="full" type="button">Volledig</button>
-            <button class="mode-btn" data-mode="summary" type="button">Samenvatting</button>
-            <button class="mode-btn" data-mode="chapters" type="button">Per hoofdstuk</button>
-            <button class="mode-btn" data-mode="conclusions" type="button">Conclusies</button>
-          </div>
         </section>
 
         <section class="panel insights" aria-label="Documenthulp">

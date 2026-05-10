@@ -22,6 +22,8 @@ const els = {
   backBtn: document.querySelector("#backBtn"),
   nextHeadingBtn: document.querySelector("#nextHeadingBtn"),
   playbackStatus: document.querySelector("#playbackStatus"),
+  playerProgressFill: document.querySelector("#playerProgressFill"),
+  playerProgressText: document.querySelector("#playerProgressText"),
   insightTabSummary: document.querySelector("#insightTabSummary"),
   insightTabQuestion: document.querySelector("#insightTabQuestion"),
   summaryPane: document.querySelector("#summaryPane"),
@@ -44,7 +46,7 @@ const PLAN_LIMITS = {
 const AI_TTS_ENDPOINT = "/api/tts";
 
 const STYLE_PRESETS = {
-  calm: { rate: 0.9, pitch: 0.95 },
+  calm: { rate: 1.0, pitch: 0.95 },
   business: { rate: 1.0, pitch: 1.0 },
   warm: { rate: 0.95, pitch: 1.1 },
   energy: { rate: 1.15, pitch: 1.12 },
@@ -124,6 +126,8 @@ function init() {
   refreshRanges();
   setInsightTab("summary");
   setPlaybackStatus("Gestopt");
+  updatePlaybackProgress();
+  syncPlaybackButtons();
 
   if ("serviceWorker" in navigator) {
     window.addEventListener("load", () => {
@@ -789,6 +793,8 @@ function setMode(mode, keepIndex = false) {
   }
 
   highlightCurrentChunk();
+  updatePlaybackProgress();
+  syncPlaybackButtons();
 }
 
 function rebuildActiveChunks() {
@@ -852,9 +858,16 @@ async function testVoice() {
 }
 
 function startPlayback() {
+  if (state.speaking && !state.paused) {
+    setStatus("Voorlezen is al bezig.");
+    syncPlaybackButtons();
+    return;
+  }
+
   if (!state.activeChunks.length) {
     setStatus("Laad eerst een document.");
     setPlaybackStatus("Wacht op document");
+    syncPlaybackButtons();
     return;
   }
 
@@ -866,14 +879,17 @@ function startPlayback() {
     state.speaking = true;
     setStatus("Voorlezen hervat.");
     setPlaybackStatus("Bezig met afspelen");
+    syncPlaybackButtons();
     return;
   }
   setPlaybackStatus("Starten...");
+  syncPlaybackButtons();
   startAiPlayback();
 }
 
 async function startAiPlayback() {
   if (!state.activeChunks.length) {
+    syncPlaybackButtons();
     return;
   }
 
@@ -885,25 +901,31 @@ async function startAiPlayback() {
   state.speaking = true;
   state.currentIndex = safeIndex;
   setPlaybackStatus("Bezig met afspelen");
+  updatePlaybackProgress();
+  syncPlaybackButtons();
 
   let nextBlobPromise = fetchAiAudioBlob(state.activeChunks[safeIndex].text);
 
   for (let index = safeIndex; index < state.activeChunks.length; index += 1) {
     if (state.stopRequested || sessionId !== state.playbackSessionId) {
+      syncPlaybackButtons();
       return;
     }
 
     state.currentIndex = index;
     state.currentChunkId = state.activeChunks[index].id;
     highlightCurrentChunk();
+    updatePlaybackProgress();
 
     const audioBlob = await nextBlobPromise;
     if (state.stopRequested || sessionId !== state.playbackSessionId) {
+      syncPlaybackButtons();
       return;
     }
     if (!audioBlob) {
       state.speaking = false;
       setPlaybackStatus("Gestopt");
+      syncPlaybackButtons();
       return;
     }
 
@@ -917,6 +939,7 @@ async function startAiPlayback() {
     if (!ok) {
       state.speaking = false;
       setPlaybackStatus("Gestopt");
+      syncPlaybackButtons();
       return;
     }
   }
@@ -924,6 +947,8 @@ async function startAiPlayback() {
   state.speaking = false;
   setStatus("Klaar met voorlezen.");
   setPlaybackStatus("Klaar");
+  updatePlaybackProgress(true);
+  syncPlaybackButtons();
 }
 
 function togglePause() {
@@ -933,6 +958,7 @@ function togglePause() {
     state.speaking = false;
     setStatus("Pauze aangevraagd...");
     setPlaybackStatus("Gepauzeerd");
+    syncPlaybackButtons();
     return;
   }
 
@@ -942,6 +968,7 @@ function togglePause() {
     state.speaking = false;
     setStatus("Voorlezen gepauzeerd.");
     setPlaybackStatus("Gepauzeerd");
+    syncPlaybackButtons();
     return;
   }
 
@@ -953,6 +980,7 @@ function togglePause() {
     state.speaking = true;
     setStatus("Voorlezen hervat.");
     setPlaybackStatus("Bezig met afspelen");
+    syncPlaybackButtons();
   }
 }
 
@@ -970,6 +998,8 @@ function stopPlayback() {
   state.paused = false;
   state.speaking = false;
   setPlaybackStatus("Gestopt");
+  updatePlaybackProgress();
+  syncPlaybackButtons();
 }
 
 async function fetchAiAudioBlob(text) {
@@ -1089,6 +1119,7 @@ function sampleTestSentence() {
 
 function jumpBack() {
   if (!state.activeChunks.length) {
+    syncPlaybackButtons();
     return;
   }
 
@@ -1097,19 +1128,24 @@ function jumpBack() {
   state.currentIndex = Math.max(0, state.currentIndex - 2);
   state.currentChunkId = state.activeChunks[state.currentIndex]?.id || "";
   highlightCurrentChunk();
+  updatePlaybackProgress();
 
   if (shouldContinue) {
     startPlayback();
+    return;
   }
+  syncPlaybackButtons();
 }
 
 function jumpToNextHeading() {
   if (!state.chunks.length) {
+    syncPlaybackButtons();
     return;
   }
 
   const currentChunk = state.activeChunks[state.currentIndex] || state.chunks[0];
   if (!currentChunk) {
+    syncPlaybackButtons();
     return;
   }
 
@@ -1118,6 +1154,7 @@ function jumpToNextHeading() {
 
   if (nextChapter === -1) {
     setStatus("Je bent al bij de laatste kop.");
+    syncPlaybackButtons();
     return;
   }
 
@@ -1127,6 +1164,7 @@ function jumpToNextHeading() {
 function jumpToChapter(chapterIndex, startPlaying) {
   const targetChunk = state.chunks.find((chunk) => chunk.chapterIndex === chapterIndex);
   if (!targetChunk) {
+    syncPlaybackButtons();
     return;
   }
 
@@ -1140,14 +1178,18 @@ function jumpToChapter(chapterIndex, startPlaying) {
   }
 
   highlightCurrentChunk();
+  updatePlaybackProgress();
 
   if (startPlaying) {
     startPlayback();
+    return;
   }
+  syncPlaybackButtons();
 }
 
 function jumpToChunkId(chunkId, resumePlayback) {
   if (!chunkId) {
+    syncPlaybackButtons();
     return;
   }
 
@@ -1159,6 +1201,7 @@ function jumpToChunkId(chunkId, resumePlayback) {
 
   const index = state.activeChunks.findIndex((chunk) => chunk.id === chunkId);
   if (index === -1) {
+    syncPlaybackButtons();
     return;
   }
 
@@ -1167,10 +1210,13 @@ function jumpToChunkId(chunkId, resumePlayback) {
   state.currentIndex = index;
   state.currentChunkId = chunkId;
   highlightCurrentChunk();
+  updatePlaybackProgress();
 
   if (shouldContinue) {
     startPlayback();
+    return;
   }
+  syncPlaybackButtons();
 }
 
 function highlightCurrentChunk() {
@@ -1343,6 +1389,42 @@ function setPlaybackStatus(message) {
     return;
   }
   els.playbackStatus.textContent = `Afspeelstatus: ${message}`;
+}
+
+function updatePlaybackProgress(forceComplete = false) {
+  const total = state.activeChunks.length;
+  if (!els.playerProgressFill || !els.playerProgressText) {
+    return;
+  }
+
+  if (!total) {
+    els.playerProgressFill.style.width = "0%";
+    els.playerProgressText.textContent = "Voortgang: 0 / 0";
+    return;
+  }
+
+  const safeIndex = Math.min(Math.max(state.currentIndex, 0), total - 1);
+  const current = forceComplete ? total : safeIndex + 1;
+  const percent = Math.round((current / total) * 100);
+  els.playerProgressFill.style.width = `${percent}%`;
+  els.playerProgressText.textContent = `Voortgang: ${current} / ${total}`;
+}
+
+function syncPlaybackButtons() {
+  const hasAudio = state.activeChunks.length > 0;
+  const isRunning = state.speaking && !state.paused;
+  const isPaused = state.paused;
+  const canControlPlayback = state.speaking || state.paused;
+
+  els.playBtn.disabled = !hasAudio || isRunning;
+  els.pauseBtn.disabled = !canControlPlayback;
+  els.stopBtn.disabled = !canControlPlayback;
+  els.backBtn.disabled = !hasAudio;
+  els.nextHeadingBtn.disabled = !hasAudio;
+
+  if (isPaused && hasAudio) {
+    els.playBtn.disabled = false;
+  }
 }
 
 function capitalize(value) {

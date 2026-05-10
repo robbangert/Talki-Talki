@@ -7,7 +7,7 @@ LeesMee is een browserapp om tekst te laten voorlezen, slim te filteren, samen t
 - Natuurlijke AI-stemmen via Netlify Function (`/api/tts`)
 - Stemtestknop voor directe controle van de AI-stem
 - Betrouwbaarder starten van stem op mobiel (met veilige herstartvertraging)
-- Focusmodi: volledig, samenvatting, per hoofdstuk, conclusies
+- Samenvatting met één klik
 - Vraag-en-antwoord op basis van de geladen tekst
 - Apart menu voor `Samenvatting` en `Vragen`
 - Lokale documentopslag (Free: 5 documenten, hogere plannen: meer)
