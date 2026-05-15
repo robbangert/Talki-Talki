@@ -45,11 +45,11 @@ const els = {
 
 const PLAN_KEY = "leesmee_plan_v1";
 const SAVED_DOCS_KEY = "leesmee_saved_docs_v1";
-const APP_VERSION = "v2026-05-10.9";
+const APP_VERSION = "v2026-05-10.5";
 const AI_RETRY_ATTEMPTS = 5;
 const AI_RETRY_DELAY_MS = 1200;
-const AI_FETCH_TIMEOUT_MS = 35000;
-const CHUNK_RECOVERY_ATTEMPTS = 2;
+const AI_FETCH_TIMEOUT_MS = 25000;
+const MAX_CONSECUTIVE_TTS_FAILURES = 3;
 const PLAN_LIMITS = {
   free: 5,
   premium: 50,
@@ -58,7 +58,7 @@ const PLAN_LIMITS = {
 const AI_TTS_ENDPOINT = "/api/tts";
 const MAX_DOCUMENT_CHARS = 350000;
 const MAX_PDF_PAGES = 220;
-const CHUNK_MAX_CHARS = 520;
+const CHUNK_MAX_CHARS = 900;
 const PLAYBACK_STATES = {
   IDLE: "idle",
   LOADING: "loading",
@@ -235,6 +235,11 @@ function bindEvents() {
     els.answerOutput.textContent = answerQuestion(question);
   });
 
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden && state.speaking) {
+      togglePause();
+    }
+  });
 }
 
 function setInsightTab(tab) {
@@ -1047,6 +1052,7 @@ async function startAiPlayback() {
   const sessionId = state.playbackSessionId;
   state.stopRequested = false;
   state.currentIndex = safeIndex;
+  let consecutiveFailures = 0;
   updatePlaybackProgress();
   syncPlaybackButtons();
 
@@ -1064,25 +1070,7 @@ async function startAiPlayback() {
     setPlaybackStatus(`Audio ophalen (${index + 1}/${state.activeChunks.length})...`);
     syncPlaybackButtons();
 
-    let audioBlob = null;
-    for (let recoveryAttempt = 1; recoveryAttempt <= CHUNK_RECOVERY_ATTEMPTS + 1; recoveryAttempt += 1) {
-      audioBlob = await fetchAiAudioBlob(state.activeChunks[index].text, sessionId);
-      if (audioBlob || state.stopRequested || sessionId !== state.playbackSessionId) {
-        break;
-      }
-      if (state.playbackState === PLAYBACK_STATES.PAUSED) {
-        break;
-      }
-      if (recoveryAttempt <= CHUNK_RECOVERY_ATTEMPTS) {
-        const retryInMs = 700 * recoveryAttempt;
-        setStatus(
-          `Stuk ${index + 1} tijdelijk niet bereikbaar. Nieuwe poging ${recoveryAttempt + 1}/${
-            CHUNK_RECOVERY_ATTEMPTS + 1
-          }...`
-        );
-        await sleep(retryInMs);
-      }
-    }
+    const audioBlob = await fetchAiAudioBlob(state.activeChunks[index].text, sessionId);
     if (state.stopRequested || sessionId !== state.playbackSessionId) {
       syncPlaybackButtons();
       return;
@@ -1093,13 +1081,21 @@ async function startAiPlayback() {
         syncPlaybackButtons();
         return;
       }
-      setPlaybackState(PLAYBACK_STATES.IDLE);
-      setPlaybackStatus("Onderbroken");
-      setStatus(`Voorlezen onderbroken bij stuk ${index + 1}. Tik Start om verder te gaan vanaf dit punt.`);
-      syncPlaybackButtons();
-      return;
+      consecutiveFailures += 1;
+      if (consecutiveFailures >= MAX_CONSECUTIVE_TTS_FAILURES) {
+        setPlaybackState(PLAYBACK_STATES.IDLE);
+        setPlaybackStatus("Gestopt");
+        setStatus("Voorlezen gestopt: meerdere AI-audiofouten achter elkaar.");
+        syncPlaybackButtons();
+        return;
+      }
+      setStatus(
+        `Stuk ${index + 1} kon niet worden opgehaald. We proberen door te gaan (${consecutiveFailures}/${MAX_CONSECUTIVE_TTS_FAILURES}).`
+      );
+      continue;
     }
 
+    consecutiveFailures = 0;
     setPlaybackState(PLAYBACK_STATES.PLAYING);
     setPlaybackStatus(`Bezig met afspelen (${index + 1}/${state.activeChunks.length})`);
     const ok = await playAudioBlob(audioBlob, sessionId);
@@ -1522,102 +1518,20 @@ function ensureSummary() {
     ? topChapterNames
     : keywords.slice(0, 3).map((keyword) => keyword.word);
 
+  const summaryLines = [
+    "Kern in 3 punten:",
+    ...primaryPoints.slice(0, 3).map((point) => `- ${capitalize(point)}`),
+    "",
+    "Belangrijkste tekststukken:",
+    ...summaryChunks.map((chunk) => `- ${chunk.text}`),
+  ];
+
   state.summaryCache = {
     summaryChunks,
-    summaryText: buildNarrativeSummary(summaryChunks, primaryPoints),
+    summaryText: summaryLines.join("\n"),
   };
 
   return state.summaryCache;
-}
-
-function buildNarrativeSummary(summaryChunks, primaryPoints) {
-  const themes = primaryPoints
-    .map((point) => normalizeTheme(point))
-    .filter(Boolean)
-    .slice(0, 3);
-  const fragments = summaryChunks
-    .map((chunk) => summarizeAsFragment(chunk.text))
-    .filter(Boolean)
-    .slice(0, 5);
-
-  const intro = themes.length
-    ? `De kern van deze tekst draait om ${joinNaturalList(themes)}.`
-    : "Deze tekst heeft een duidelijke lijn met meerdere samenhangende thema's.";
-
-  if (!fragments.length) {
-    return `${intro}\n\nIk kon nog te weinig inhoud vinden voor een verhalende samenvatting.`;
-  }
-
-  const lines = [intro, `Aan het begin ${fragments[0]}.`];
-
-  const middle = fragments.slice(1, -1);
-  if (middle.length === 1) {
-    lines.push(`Daarna ${middle[0]}.`);
-  } else if (middle.length >= 2) {
-    lines.push(`Vervolgens ${middle[0]}, waarna ${middle[1]}.`);
-  }
-
-  if (fragments.length > 1) {
-    lines.push(`Aan het einde ${fragments[fragments.length - 1]}.`);
-  }
-
-  lines.push("Zo krijg je snel het verloop van het document in gewone taal.");
-
-  return lines.join("\n\n");
-}
-
-function normalizeTheme(value) {
-  const normalized = String(value || "")
-    .replace(/[_-]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .toLowerCase();
-  return normalized;
-}
-
-function summarizeAsFragment(text) {
-  const normalized = String(text || "")
-    .replace(/\s+/g, " ")
-    .replace(/^[\d)\].:-\s]+/, "")
-    .trim();
-
-  if (!normalized) {
-    return "";
-  }
-
-  const clipped =
-    normalized.length > 220 ? `${normalized.slice(0, 217).trimEnd()}...` : normalized;
-  const withoutEnding = clipped.replace(/[.!?;:,]+$/, "").trim();
-
-  if (!withoutEnding) {
-    return "";
-  }
-
-  return lowerFirst(withoutEnding);
-}
-
-function joinNaturalList(items) {
-  if (!items.length) {
-    return "";
-  }
-  if (items.length === 1) {
-    return items[0];
-  }
-  if (items.length === 2) {
-    return `${items[0]} en ${items[1]}`;
-  }
-  return `${items.slice(0, -1).join(", ")} en ${items[items.length - 1]}`;
-}
-
-function lowerFirst(value) {
-  if (!value) {
-    return value;
-  }
-  const first = value[0];
-  if (/[A-ZÀ-Ý]/.test(first)) {
-    return first.toLowerCase() + value.slice(1);
-  }
-  return value;
 }
 
 function topKeywords(text, limit) {
@@ -1900,6 +1814,13 @@ function refreshToLatestVersion() {
     return;
   }
   window.location.reload();
+}
+
+function capitalize(value) {
+  if (!value) {
+    return value;
+  }
+  return value[0].toUpperCase() + value.slice(1);
 }
 
 const DEMO_TEXT = `LeesMee is een app voor studenten, professionals en iedereen die liever luistert dan leest.

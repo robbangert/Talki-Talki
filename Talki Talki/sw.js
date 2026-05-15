@@ -1,4 +1,4 @@
-const CACHE_NAME = "leesmee-v8";
+const CACHE_NAME = "leesmee-v9";
 const ASSETS = ["/", "/index.html", "/pricing.html", "/styles.css", "/manifest.json"];
 
 self.addEventListener("install", (event) => {

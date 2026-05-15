@@ -94,7 +94,7 @@
     }
 
     const head = clampInputText(merged, maxChars);
-    const tail = merged.slice(head.length).trim();
+    let tail = merged.slice(head.length).trim();
 
     // Avoid dropping tiny endings by keeping them in the current request.
     if (tail.length > 0 && tail.length < 18 && merged.length <= maxChars + 18) {
