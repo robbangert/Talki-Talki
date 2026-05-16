@@ -45,7 +45,7 @@ const els = {
 
 const PLAN_KEY = "leesmee_plan_v1";
 const SAVED_DOCS_KEY = "leesmee_saved_docs_v1";
-const APP_VERSION = "v2026-05-10.9";
+const APP_VERSION = "v2026-05-10.10";
 const AI_RETRY_ATTEMPTS = 5;
 const AI_RETRY_DELAY_MS = 1200;
 const AI_FETCH_TIMEOUT_MS = 35000;
@@ -128,6 +128,7 @@ const state = {
   paused: false,
   stopRequested: false,
   aiAudio: null,
+  playerAudio: null,
   aiResolve: null,
   playbackSessionId: 0,
   playbackState: PLAYBACK_STATES.IDLE,
@@ -894,6 +895,27 @@ function splitSentenceByMaxLength(sentence, maxLength) {
   );
 }
 
+function splitForTtsFallback(text, maxLength) {
+  const normalized = String(text || "").replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return [];
+  }
+  if (normalized.length <= maxLength) {
+    return [normalized];
+  }
+
+  const sentenceLikeParts = (normalized.match(/[^.!?]+[.!?]?/g) || [normalized])
+    .map((part) => part.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+
+  const chunks = [];
+  for (const part of sentenceLikeParts) {
+    chunks.push(...splitSentenceByMaxLength(part, maxLength));
+  }
+
+  return chunks.length ? chunks : splitSentenceByMaxLength(normalized, maxLength);
+}
+
 function findChapterIndex(position, chapters) {
   let index = 0;
   for (let i = 0; i < chapters.length; i += 1) {
@@ -1093,6 +1115,51 @@ async function startAiPlayback() {
         syncPlaybackButtons();
         return;
       }
+      const fallbackSegments = splitForTtsFallback(state.activeChunks[index].text, 260);
+      if (fallbackSegments.length > 1) {
+        setStatus(`Stuk ${index + 1} wordt opgesplitst voor stabiel afspelen...`);
+      }
+
+      let fallbackSucceeded = fallbackSegments.length > 0;
+      for (let partIndex = 0; partIndex < fallbackSegments.length; partIndex += 1) {
+        if (state.stopRequested || sessionId !== state.playbackSessionId) {
+          syncPlaybackButtons();
+          return;
+        }
+
+        const partText = fallbackSegments[partIndex];
+        const partBlob = await fetchAiAudioBlob(partText, sessionId);
+        if (!partBlob) {
+          if (state.playbackState === PLAYBACK_STATES.PAUSED) {
+            setPlaybackStatus("Gepauzeerd");
+            syncPlaybackButtons();
+            return;
+          }
+          fallbackSucceeded = false;
+          break;
+        }
+
+        setPlaybackState(PLAYBACK_STATES.PLAYING);
+        setPlaybackStatus(
+          `Bezig met afspelen (${index + 1}/${state.activeChunks.length}, deel ${partIndex + 1}/${
+            fallbackSegments.length
+          })`
+        );
+        const partOk = await playAudioBlob(partBlob, sessionId);
+        if (!partOk) {
+          if (state.playbackState === PLAYBACK_STATES.PAUSED || state.stopRequested) {
+            syncPlaybackButtons();
+            return;
+          }
+          fallbackSucceeded = false;
+          break;
+        }
+      }
+
+      if (fallbackSucceeded) {
+        continue;
+      }
+
       setPlaybackState(PLAYBACK_STATES.IDLE);
       setPlaybackStatus("Onderbroken");
       setStatus(`Voorlezen onderbroken bij stuk ${index + 1}. Tik Start om verder te gaan vanaf dit punt.`);
@@ -1114,6 +1181,8 @@ async function startAiPlayback() {
       syncPlaybackButtons();
       return;
     }
+
+    await sleep(120);
   }
 
   setPlaybackState(PLAYBACK_STATES.IDLE);
@@ -1196,8 +1265,16 @@ function stopPlayback() {
   }
   if (state.aiAudio) {
     state.aiAudio.pause();
-    state.aiAudio.src = "";
     state.aiAudio = null;
+  }
+  if (state.playerAudio) {
+    try {
+      state.playerAudio.pause();
+      state.playerAudio.removeAttribute("src");
+      state.playerAudio.load();
+    } catch {
+      // no-op
+    }
   }
   setPlaybackState(PLAYBACK_STATES.IDLE);
   setPlaybackStatus("Gestopt");
@@ -1315,30 +1392,65 @@ function playAudioBlob(blob, sessionId) {
     }
 
     const url = URL.createObjectURL(blob);
-    const audio = new Audio(url);
+    const audio = ensurePlayerAudioElement();
+    try {
+      audio.pause();
+    } catch {
+      // no-op
+    }
+    audio.src = url;
+    audio.load();
     state.aiAudio = audio;
     let done = false;
+    let urlRevoked = false;
 
     const clean = (result) => {
       if (done) {
         return;
       }
       done = true;
-      URL.revokeObjectURL(url);
+      if (!urlRevoked) {
+        URL.revokeObjectURL(url);
+        urlRevoked = true;
+      }
       if (state.aiAudio === audio) {
         state.aiAudio = null;
       }
       if (state.aiResolve === clean) {
         state.aiResolve = null;
       }
+      audio.onended = null;
+      audio.onerror = null;
       resolve(result);
     };
 
     state.aiResolve = clean;
     audio.onended = () => clean(true);
     audio.onerror = () => clean(false);
-    audio.play().catch(() => clean(false));
+    audio
+      .play()
+      .catch((error) => {
+        const reason = error && error.message ? error.message : "playback blocked";
+        setStatus(`Afspelen kon niet starten (${reason}). Tik nogmaals op Start.`);
+        clean(false);
+      });
   });
+}
+
+function ensurePlayerAudioElement() {
+  if (state.playerAudio) {
+    return state.playerAudio;
+  }
+  const audio = new Audio();
+  audio.preload = "auto";
+  try {
+    audio.setAttribute("playsinline", "");
+    audio.setAttribute("webkit-playsinline", "");
+  } catch {
+    // no-op
+  }
+  state.playerAudio = audio;
+  return audio;
 }
 
 function aiInstructions() {
